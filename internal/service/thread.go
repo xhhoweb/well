@@ -98,13 +98,21 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 	if v, err := s.l2.Get(ctxL2, key).Bytes(); err == nil {
 		var dto ThreadDTO
 		if err := dto.UnmarshalBinary(v); err == nil {
+codex/review-go-code-for-headless-backend-ws68yo
 			if s.l1 != nil {
 				if bytes, _ := json.Marshal(&dto); bytes != nil {
 					s.l1.Set(key, bytes)
 				}
+
+			// Write L1
+				if s.l1 != nil {
+					if bytes, _ := json.Marshal(&dto); bytes != nil {
+						s.l1.Set(key, bytes)
+					}
+				}
+				return &dto, nil
+main
 			}
-			return &dto, nil
-		}
 	}
 
 	// SingleFlight + DB
@@ -137,11 +145,20 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 		if bytes, err := dto.MarshalBinary(); err == nil {
 			s.l2.Set(ctxL2, key, bytes, time.Duration(s.l2Config.L2TTL)*time.Second)
 		}
+codex/review-go-code-for-headless-backend-ws68yo
 		if s.l1 != nil {
 			if bytes, _ := json.Marshal(&dto); bytes != nil {
 				s.l1.Set(key, bytes)
 			}
 		}
+
+		// Write L1
+			if s.l1 != nil {
+				if bytes, _ := json.Marshal(&dto); bytes != nil {
+					s.l1.Set(key, bytes)
+				}
+			}
+main
 
 		return dto, nil
 	})
@@ -277,7 +294,15 @@ func (s *ThreadService) Update(ctx context.Context, tid int64, subject string, s
 	}
 
 	// Invalidate Cache
+ codex/review-go-code-for-headless-backend-ws68yo
 	s.invalidateThreadCache(tid)
+=======
+	key := fmt.Sprintf("thread:%d", tid)
+	if s.l1 != nil {
+		s.l1.Remove(key)
+	}
+	s.l2.Del(context.Background(), key)
+ main
 
 	return nil
 }
@@ -297,7 +322,15 @@ func (s *ThreadService) Delete(ctx context.Context, tid int64) error {
 	}
 
 	// Invalidate Cache
+codex/review-go-code-for-headless-backend-ws68yo
 	s.invalidateThreadCache(tid)
+
+	key := fmt.Sprintf("thread:%d", tid)
+	if s.l1 != nil {
+		s.l1.Remove(key)
+	}
+	s.l2.Del(context.Background(), key)
+main
 
 	return nil
 }
@@ -309,7 +342,15 @@ func (s *ThreadService) IncViews(ctx context.Context, tid int64) error {
 	}
 
 	// Invalidate Cache
+codex/review-go-code-for-headless-backend-ws68yo
 	s.invalidateThreadCache(tid)
+
+	key := fmt.Sprintf("thread:%d", tid)
+	if s.l1 != nil {
+		s.l1.Remove(key)
+	}
+	s.l2.Del(context.Background(), key)
+ main
 
 	return nil
 }
