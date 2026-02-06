@@ -28,6 +28,14 @@ type ThreadService struct {
 	l2Config *config.CacheConfig
 }
 
+func (s *ThreadService) invalidateThreadCache(tid int64) {
+	key := fmt.Sprintf("thread:%d", tid)
+	if s.l1 != nil {
+		s.l1.Remove(key)
+	}
+	s.l2.Del(context.Background(), key)
+}
+
 // ThreadDTO Thread数据传输对象
 type ThreadDTO struct {
 	Tid      int64  `json:"tid"`
@@ -269,11 +277,7 @@ func (s *ThreadService) Update(ctx context.Context, tid int64, subject string, s
 	}
 
 	// Invalidate Cache
-	key := fmt.Sprintf("thread:%d", tid)
-	if s.l1 != nil {
-		s.l1.Remove(key)
-	}
-	s.l2.Del(context.Background(), key)
+	s.invalidateThreadCache(tid)
 
 	return nil
 }
@@ -293,11 +297,7 @@ func (s *ThreadService) Delete(ctx context.Context, tid int64) error {
 	}
 
 	// Invalidate Cache
-	key := fmt.Sprintf("thread:%d", tid)
-	if s.l1 != nil {
-		s.l1.Remove(key)
-	}
-	s.l2.Del(context.Background(), key)
+	s.invalidateThreadCache(tid)
 
 	return nil
 }
@@ -309,11 +309,7 @@ func (s *ThreadService) IncViews(ctx context.Context, tid int64) error {
 	}
 
 	// Invalidate Cache
-	key := fmt.Sprintf("thread:%d", tid)
-	if s.l1 != nil {
-		s.l1.Remove(key)
-	}
-	s.l2.Del(context.Background(), key)
+	s.invalidateThreadCache(tid)
 
 	return nil
 }
