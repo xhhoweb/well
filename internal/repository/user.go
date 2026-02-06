@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 	"time"
 
 	"well_go/internal/model"
@@ -14,11 +16,38 @@ import (
 type UserRepository interface {
 	Create(ctx context.Context, user *model.User) error
 	GetByID(ctx context.Context, uid int64) (*model.User, error)
+	GetByIDs(ctx context.Context, uids []int64) ([]*model.User, error)
 	GetByUsername(ctx context.Context, username string) (*model.User, error)
 	GetByEmail(ctx context.Context, email string) (*model.User, error)
 	Update(ctx context.Context, user *model.User) error
 	UpdateLastvisit(ctx context.Context, uid int64, timestamp int) error
 	Delete(ctx context.Context, uid int64) error
+}
+
+// GetByIDs 批量根据 UID 获取用户
+func (r *userRepository) GetByIDs(ctx context.Context, uids []int64) ([]*model.User, error) {
+	if len(uids) == 0 {
+		return []*model.User{}, nil
+	}
+
+	placeholders := make([]string, 0, len(uids))
+	args := make([]interface{}, 0, len(uids))
+	for _, uid := range uids {
+		placeholders = append(placeholders, "?")
+		args = append(args, uid)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT uid, username, password, email, avatar, role, status, dateline, lastvisit, created_at, updated_at
+		FROM user WHERE status = 0 AND uid IN (%s)
+	`, strings.Join(placeholders, ","))
+
+	var users []*model.User
+	err := r.db.SelectContext(ctx, &users, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return users, nil
 }
 
 // NewUserRepository 创建用户仓库

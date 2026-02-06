@@ -48,6 +48,7 @@ type AppConfig struct {
 	Host string
 	Port int
 	Mode string
+	BaseURL string
 }
 
 // JWTConfig JWT Configuration
@@ -125,6 +126,7 @@ func setDefaults() {
 	v.SetDefault("app.host", "0.0.0.0")
 	v.SetDefault("app.port", 8080)
 	v.SetDefault("app.mode", "release")
+	v.SetDefault("app.base_url", "")
 
 	v.SetDefault("database.host", "127.0.0.1")
 	v.SetDefault("database.port", 3306)
@@ -192,6 +194,7 @@ func parseConfig() error {
 	cfg.App.Host = v.GetString("app.host")
 	cfg.App.Port = v.GetInt("app.port")
 	cfg.App.Mode = v.GetString("app.mode")
+	cfg.App.BaseURL = strings.TrimSpace(v.GetString("app.base_url"))
 
 	// JWT
 	cfg.JWT.Secret = v.GetString("jwt.secret")

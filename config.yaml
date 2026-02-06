@@ -24,6 +24,8 @@ app:
   host: "0.0.0.0"
   port: 8080
   mode: "release"  # debug, release, test
+  # 对外访问域名（用于 sitemap/robots/canonical），本地可留空
+  base_url: ""
 
 # JWT Configuration
 jwt:

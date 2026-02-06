@@ -28,6 +28,14 @@ type ThreadService struct {
 	l2Config *config.CacheConfig
 }
 
+func (s *ThreadService) invalidateThreadCache(tid int64) {
+	key := fmt.Sprintf("thread:%d", tid)
+	if s.l1 != nil {
+		s.l1.Remove(key)
+	}
+	s.l2.Del(context.Background(), key)
+}
+
 // ThreadDTO Thread数据传输对象
 type ThreadDTO struct {
 	Tid      int64  `json:"tid"`
@@ -90,6 +98,12 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 	if v, err := s.l2.Get(ctxL2, key).Bytes(); err == nil {
 		var dto ThreadDTO
 		if err := dto.UnmarshalBinary(v); err == nil {
+codex/review-go-code-for-headless-backend-ws68yo
+			if s.l1 != nil {
+				if bytes, _ := json.Marshal(&dto); bytes != nil {
+					s.l1.Set(key, bytes)
+				}
+
 			// Write L1
 				if s.l1 != nil {
 					if bytes, _ := json.Marshal(&dto); bytes != nil {
@@ -97,6 +111,7 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 					}
 				}
 				return &dto, nil
+main
 			}
 	}
 
@@ -130,12 +145,20 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 		if bytes, err := dto.MarshalBinary(); err == nil {
 			s.l2.Set(ctxL2, key, bytes, time.Duration(s.l2Config.L2TTL)*time.Second)
 		}
+codex/review-go-code-for-headless-backend-ws68yo
+		if s.l1 != nil {
+			if bytes, _ := json.Marshal(&dto); bytes != nil {
+				s.l1.Set(key, bytes)
+			}
+		}
+
 		// Write L1
 			if s.l1 != nil {
 				if bytes, _ := json.Marshal(&dto); bytes != nil {
 					s.l1.Set(key, bytes)
 				}
 			}
+main
 
 		return dto, nil
 	})
@@ -151,8 +174,37 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 
 // List 获取Thread列表
 func (s *ThreadService) List(ctx context.Context, fid int, page, pageSize int) ([]*ThreadListItem, error) {
+	key := fmt.Sprintf("thread:list:%d:%d:%d", fid, page, pageSize)
+
+	if s.l1 != nil {
+		if data, ok := s.l1.Get(key); ok && data != nil {
+			var list []*ThreadListItem
+			if err := json.Unmarshal(data, &list); err == nil {
+				return list, nil
+			}
+		}
+	}
+
+	if data, err := s.l2.Get(ctx, key).Bytes(); err == nil {
+		var list []*ThreadListItem
+		if err := json.Unmarshal(data, &list); err == nil {
+			if s.l1 != nil {
+				s.l1.Set(key, data)
+			}
+			return list, nil
+		}
+	}
+
 	offset := (page - 1) * pageSize
-	threads, err := s.repo.GetByFid(ctx, fid, offset, pageSize)
+	tids, err := s.repo.GetListTIDsByFid(ctx, fid, offset, pageSize)
+	if err != nil {
+		return nil, err
+	}
+	if len(tids) == 0 {
+		return []*ThreadListItem{}, nil
+	}
+
+	threads, err := s.repo.GetByTIDs(ctx, tids)
 	if err != nil {
 		return nil, err
 	}
@@ -171,6 +223,14 @@ func (s *ThreadService) List(ctx context.Context, fid int, page, pageSize int) (
 			Status:   t.Status,
 		})
 	}
+
+	if data, _ := json.Marshal(list); data != nil {
+		if s.l1 != nil {
+			s.l1.Set(key, data)
+		}
+		s.l2.Set(ctx, key, data, time.Duration(s.l2Config.L2TTL)*time.Second)
+	}
+
 	return list, nil
 }
 
@@ -234,11 +294,15 @@ func (s *ThreadService) Update(ctx context.Context, tid int64, subject string, s
 	}
 
 	// Invalidate Cache
+ codex/review-go-code-for-headless-backend-ws68yo
+	s.invalidateThreadCache(tid)
+=======
 	key := fmt.Sprintf("thread:%d", tid)
 	if s.l1 != nil {
 		s.l1.Remove(key)
 	}
 	s.l2.Del(context.Background(), key)
+ main
 
 	return nil
 }
@@ -258,11 +322,15 @@ func (s *ThreadService) Delete(ctx context.Context, tid int64) error {
 	}
 
 	// Invalidate Cache
+codex/review-go-code-for-headless-backend-ws68yo
+	s.invalidateThreadCache(tid)
+
 	key := fmt.Sprintf("thread:%d", tid)
 	if s.l1 != nil {
 		s.l1.Remove(key)
 	}
 	s.l2.Del(context.Background(), key)
+main
 
 	return nil
 }
@@ -274,11 +342,15 @@ func (s *ThreadService) IncViews(ctx context.Context, tid int64) error {
 	}
 
 	// Invalidate Cache
+codex/review-go-code-for-headless-backend-ws68yo
+	s.invalidateThreadCache(tid)
+
 	key := fmt.Sprintf("thread:%d", tid)
 	if s.l1 != nil {
 		s.l1.Remove(key)
 	}
 	s.l2.Del(context.Background(), key)
+ main
 
 	return nil
 }

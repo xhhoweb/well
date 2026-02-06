@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"well_go/internal/core/config"
@@ -250,6 +251,72 @@ func (s *UserService) GetUserByID(ctx context.Context, uid int64) (*model.UserDT
 	}
 
 	return dto, nil
+}
+
+// GetUsersByIDs 批量获取用户（用于列表/首页聚合，避免 N+1 查询）
+func (s *UserService) GetUsersByIDs(ctx context.Context, uids []int64) (map[int64]*model.UserDTO, error) {
+	result := make(map[int64]*model.UserDTO, len(uids))
+	if len(uids) == 0 {
+		return result, nil
+	}
+
+	unique := make(map[int64]struct{}, len(uids))
+	missing := make([]int64, 0, len(uids))
+
+	for _, uid := range uids {
+		if uid <= 0 {
+			continue
+		}
+		if _, ok := unique[uid]; ok {
+			continue
+		}
+		unique[uid] = struct{}{}
+
+		key := fmt.Sprintf("user:%d", uid)
+		if s.l1 != nil {
+			if data, ok := s.l1.Get(key); ok && data != nil {
+				var dto model.UserDTO
+				if err := json.Unmarshal(data, &dto); err == nil {
+					result[uid] = &dto
+					continue
+				}
+			}
+		}
+		missing = append(missing, uid)
+	}
+
+	if len(missing) == 0 {
+		return result, nil
+	}
+
+	// 保持稳定顺序，方便排查和复用
+	sort.Slice(missing, func(i, j int) bool { return missing[i] < missing[j] })
+
+	users, err := s.repo.GetByIDs(ctx, missing)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, u := range users {
+		dto := &model.UserDTO{
+			Uid:      u.Uid,
+			Username: u.Username,
+			Email:    u.Email,
+			Avatar:   u.Avatar,
+			Role:     u.Role,
+			Status:   u.Status,
+			Dateline: u.Dateline,
+		}
+		result[u.Uid] = dto
+
+		if data, _ := json.Marshal(dto); data != nil {
+			if s.l1 != nil {
+				s.l1.Set(fmt.Sprintf("user:%d", u.Uid), data)
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // generateJWT 生成JWT（简化版）

@@ -96,8 +96,8 @@ func main() {
 	logger.Info("Runtime warmup: " + runtime.WarmUpLog())
 
 	// 10. 初始化 Handler
-	threadV1Handler := v1.NewThreadHandler(threadSvc)
-	threadMgtHandler := mgt.NewThreadHandler(threadSvc)
+	threadV1Handler := v1.NewThreadHandler(threadSvc, tagSvc, userSvc)
+	threadMgtHandler := mgt.NewThreadHandler(threadSvc, tagSvc)
 	cacheMgtHandler := mgt.NewCacheHandler(threadSvc)
 
 	forumV1Handler := v1.NewForumHandler(forumSvc)
@@ -110,8 +110,10 @@ func main() {
 	userMgtHandler := mgt.NewUserMgtHandler(userSvc)
 
 	// 11. SEO 服务初始化
-	// 注意：0.0.0.0 是监听地址，sitemap 中使用 localhost
-	baseURL := fmt.Sprintf("https://localhost:%d", cfg.App.Port)
+	baseURL := cfg.App.BaseURL
+	if baseURL == "" {
+		baseURL = fmt.Sprintf("http://127.0.0.1:%d", cfg.App.Port)
+	}
 	sitemapConfig := &seo.SitemapConfig{
 		BaseURL:  baseURL,
 		CacheTTL: 5 * time.Minute,
