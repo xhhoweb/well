@@ -74,11 +74,13 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 	key := fmt.Sprintf("thread:%d", tid)
 
 	// L1 Cache
-	if data, ok := s.l1.Get(key); ok {
-		if data != nil {
-			var dto ThreadDTO
-			if err := json.Unmarshal(data, &dto); err == nil {
-				return &dto, nil
+	if s.l1 != nil {
+		if data, ok := s.l1.Get(key); ok {
+			if data != nil {
+				var dto ThreadDTO
+				if err := json.Unmarshal(data, &dto); err == nil {
+					return &dto, nil
+				}
 			}
 		}
 	}
@@ -89,11 +91,13 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 		var dto ThreadDTO
 		if err := dto.UnmarshalBinary(v); err == nil {
 			// Write L1
-			if bytes, _ := json.Marshal(&dto); bytes != nil {
-				s.l1.Set(key, bytes)
+				if s.l1 != nil {
+					if bytes, _ := json.Marshal(&dto); bytes != nil {
+						s.l1.Set(key, bytes)
+					}
+				}
+				return &dto, nil
 			}
-			return &dto, nil
-		}
 	}
 
 	// SingleFlight + DB
@@ -127,15 +131,20 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 			s.l2.Set(ctxL2, key, bytes, time.Duration(s.l2Config.L2TTL)*time.Second)
 		}
 		// Write L1
-		if bytes, _ := json.Marshal(&dto); bytes != nil {
-			s.l1.Set(key, bytes)
-		}
+			if s.l1 != nil {
+				if bytes, _ := json.Marshal(&dto); bytes != nil {
+					s.l1.Set(key, bytes)
+				}
+			}
 
 		return dto, nil
 	})
 
 	if err != nil {
 		return nil, err
+	}
+	if v == nil {
+		return nil, nil
 	}
 	return v.(*ThreadDTO), nil
 }
@@ -226,7 +235,9 @@ func (s *ThreadService) Update(ctx context.Context, tid int64, subject string, s
 
 	// Invalidate Cache
 	key := fmt.Sprintf("thread:%d", tid)
-	s.l1.Remove(key)
+	if s.l1 != nil {
+		s.l1.Remove(key)
+	}
 	s.l2.Del(context.Background(), key)
 
 	return nil
@@ -248,7 +259,9 @@ func (s *ThreadService) Delete(ctx context.Context, tid int64) error {
 
 	// Invalidate Cache
 	key := fmt.Sprintf("thread:%d", tid)
-	s.l1.Remove(key)
+	if s.l1 != nil {
+		s.l1.Remove(key)
+	}
 	s.l2.Del(context.Background(), key)
 
 	return nil
@@ -262,7 +275,9 @@ func (s *ThreadService) IncViews(ctx context.Context, tid int64) error {
 
 	// Invalidate Cache
 	key := fmt.Sprintf("thread:%d", tid)
-	s.l1.Remove(key)
+	if s.l1 != nil {
+		s.l1.Remove(key)
+	}
 	s.l2.Del(context.Background(), key)
 
 	return nil
@@ -270,7 +285,9 @@ func (s *ThreadService) IncViews(ctx context.Context, tid int64) error {
 
 // FlushCache 刷新缓存
 func (s *ThreadService) FlushCache(ctx context.Context) error {
-	s.l1.Flush()
+	if s.l1 != nil {
+		s.l1.Flush()
+	}
 	// Redis flush 需要单独处理
 	return nil
 }

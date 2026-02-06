@@ -57,8 +57,18 @@ func (s *SitemapService) GetIndex(ctx context.Context) ([]byte, error) {
 
 	// 生成 sitemap 列表
 	baseURL := s.config.BaseURL
-	templates := []URLEntry{
-		{Loc: fmt.Sprintf("%s/sitemap-thread-0.xml", baseURL), LastMod: time.Now().Format("2006-01-02")},
+	threadCount, err := s.repo.Count(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("获取主题数量失败: %w", err)
+	}
+	pages := (threadCount + s.config.MaxURLs - 1) / s.config.MaxURLs
+	if pages < 1 {
+		pages = 1
+	}
+
+	templates := make([]URLEntry, 0, pages+1)
+	for i := 1; i <= pages; i++ {
+		templates = append(templates, URLEntry{Loc: fmt.Sprintf("%s/sitemap-thread-%d.xml", baseURL, i), LastMod: time.Now().Format("2006-01-02")})
 	}
 
 	if s.tagRepo != nil {

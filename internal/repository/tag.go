@@ -22,6 +22,7 @@ type TagRepository interface {
 	Update(ctx context.Context, tag *model.Tag) error
 	Delete(ctx context.Context, tagID int) error
 	IncThreads(ctx context.Context, tagID int) error
+	DecThreads(ctx context.Context, tagID int) error
 	IncView(ctx context.Context, tagID int) error
 	// Sitemap 专用方法
 	GetSitemapList(ctx context.Context, offset, limit int) ([]*model.Tag, error)
@@ -146,6 +147,12 @@ func (r *tagRepository) Delete(ctx context.Context, tagID int) error {
 // IncThreads 增加关联主题数
 func (r *tagRepository) IncThreads(ctx context.Context, tagID int) error {
 	_, err := r.db.ExecContext(ctx, "UPDATE tag SET threads = threads + 1 WHERE tag_id = ?", tagID)
+	return err
+}
+
+// DecThreads 减少关联主题数
+func (r *tagRepository) DecThreads(ctx context.Context, tagID int) error {
+	_, err := r.db.ExecContext(ctx, "UPDATE tag SET threads = GREATEST(threads - 1, 0) WHERE tag_id = ?", tagID)
 	return err
 }
 
