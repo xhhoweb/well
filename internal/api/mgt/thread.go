@@ -14,12 +14,13 @@ var ThreadNotFound = apperr.NewAppError(apperr.CodeThreadNotFound, "thread not f
 
 // ThreadHandler Thread Management API Handler
 type ThreadHandler struct {
-	svc *service.ThreadService
+	svc    *service.ThreadService
+	tagSvc *service.TagService
 }
 
 // NewThreadHandler 创建ThreadHandler
-func NewThreadHandler(svc *service.ThreadService) *ThreadHandler {
-	return &ThreadHandler{svc: svc}
+func NewThreadHandler(svc *service.ThreadService, tagSvc *service.TagService) *ThreadHandler {
+	return &ThreadHandler{svc: svc, tagSvc: tagSvc}
 }
 
 // CreateRequest 创建Thread请求
@@ -27,6 +28,7 @@ type CreateRequest struct {
 	Fid     int64  `json:"fid" binding:"required"`
 	Subject string `json:"subject" binding:"required"`
 	Message string `json:"message" binding:"required"`
+	Tags    []string `json:"tags"`
 }
 
 // Create POST /api/mgt/thread
@@ -46,6 +48,13 @@ func (h *ThreadHandler) Create(c *gin.Context) {
 		return
 	}
 
+	for _, tag := range req.Tags {
+		if tag == "" {
+			continue
+		}
+		_ = h.tagSvc.AddToThread(c.Request.Context(), dto.Tid, tag)
+	}
+
 	response.Success(c, dto)
 }
 
@@ -53,6 +62,7 @@ func (h *ThreadHandler) Create(c *gin.Context) {
 type UpdateRequest struct {
 	Subject string `json:"subject"`
 	Status  int    `json:"status"`
+	Tags    []string `json:"tags"`
 }
 
 // Update PUT /api/mgt/thread/:tid
@@ -73,6 +83,13 @@ func (h *ThreadHandler) Update(c *gin.Context) {
 	if err := h.svc.Update(c.Request.Context(), tid, req.Subject, req.Status); err != nil {
 		response.Fail(c, err)
 		return
+	}
+
+	for _, tag := range req.Tags {
+		if tag == "" {
+			continue
+		}
+		_ = h.tagSvc.AddToThread(c.Request.Context(), tid, tag)
 	}
 
 	response.Success(c, nil)

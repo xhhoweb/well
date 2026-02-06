@@ -54,11 +54,13 @@ func (s *TagService) Get(ctx context.Context, tagID int) (*TagDTO, error) {
 	key := fmt.Sprintf("tag:%d", tagID)
 
 	// L1 Cache
-	if data, ok := s.l1.Get(key); ok {
-		if data != nil {
-			var dto TagDTO
-			if err := json.Unmarshal(data, &dto); err == nil {
-				return &dto, nil
+	if s.l1 != nil {
+		if data, ok := s.l1.Get(key); ok {
+			if data != nil {
+				var dto TagDTO
+				if err := json.Unmarshal(data, &dto); err == nil {
+					return &dto, nil
+				}
 			}
 		}
 	}
@@ -69,8 +71,10 @@ func (s *TagService) Get(ctx context.Context, tagID int) (*TagDTO, error) {
 		var dto TagDTO
 		if err := dto.UnmarshalBinary(v); err == nil {
 			// Write L1
-			if bytes, _ := json.Marshal(&dto); bytes != nil {
-				s.l1.Set(key, bytes)
+			if s.l1 != nil {
+				if bytes, _ := json.Marshal(&dto); bytes != nil {
+					s.l1.Set(key, bytes)
+				}
 			}
 			return &dto, nil
 		}
@@ -98,14 +102,19 @@ func (s *TagService) Get(ctx context.Context, tagID int) (*TagDTO, error) {
 			s.l2.Set(ctxL2, key, bytes, time.Duration(s.config.L2TTL)*time.Second)
 		}
 		// Write L1
-		if bytes, _ := json.Marshal(&dto); bytes != nil {
-			s.l1.Set(key, bytes)
+		if s.l1 != nil {
+			if bytes, _ := json.Marshal(&dto); bytes != nil {
+				s.l1.Set(key, bytes)
+			}
 		}
 		return dto, nil
 	})
 
 	if err != nil {
 		return nil, err
+	}
+	if v == nil {
+		return nil, nil
 	}
 	return v.(*TagDTO), nil
 }
@@ -296,10 +305,12 @@ func (s *TagService) RemoveFromThread(ctx context.Context, tid int64, tagID int)
 
 	for _, id := range tagIDs {
 		if id == tagID {
-			// 这里简化处理，实际应该删除指定的关联
-			_ = s.threadTag.DeleteByThread(ctx, tid)
-			// 减少关联数
-			s.repo.IncThreads(ctx, tagID)
+			if err := s.threadTag.Delete(ctx, tid, tagID); err != nil {
+				return err
+			}
+			if err := s.repo.DecThreads(ctx, tagID); err != nil {
+				return err
+			}
 			return nil
 		}
 	}
@@ -309,7 +320,9 @@ func (s *TagService) RemoveFromThread(ctx context.Context, tid int64, tagID int)
 
 // FlushCache 刷新缓存
 func (s *TagService) FlushCache(ctx context.Context) error {
-	s.l1.Flush()
+	if s.l1 != nil {
+		s.l1.Flush()
+	}
 	return nil
 }
 
