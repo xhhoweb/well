@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -21,7 +22,7 @@ import (
 // UserService 用户服务
 type UserService struct {
 	repo   repository.UserRepository
-	l1     *pool.SimpleCache[int64, *model.UserDTO] // L1 Cache
+	l1     *pool.BigCache // L1 Cache（零GC）
 	l2     *redis.Client
 	sf     *singleflight.Group
 	l2Cfg  *config.CacheConfig
@@ -30,9 +31,10 @@ type UserService struct {
 
 // NewUserService 创建用户服务
 func NewUserService(repo repository.UserRepository, redisClient *redis.Client, cacheCfg *config.CacheConfig, jwtCfg *config.JWTConfig) *UserService {
+	l1Cache, _ := pool.NewBigCache(cacheCfg.L1Cap, time.Duration(cacheCfg.L2TTL)*time.Second)
 	return &UserService{
 		repo:   repo,
-		l1:     pool.NewCache[int64, *model.UserDTO](cacheCfg.L1Cap),
+		l1:     l1Cache,
 		l2:     redisClient,
 		sf:     &singleflight.Group{},
 		l2Cfg:  cacheCfg,
@@ -145,11 +147,16 @@ func (s *UserService) GetProfile(ctx context.Context, uid int64) (*model.UserPro
 	key := fmt.Sprintf("user:profile:%d", uid)
 
 	// L1
-	if v, ok := s.l1.Get(uid); ok {
-		return &model.UserProfile{
-			UserDTO:   *v,
-			Lastvisit: 0,
-		}, nil
+	if data, ok := s.l1.Get(key); ok {
+		if data != nil {
+			var dto model.UserDTO
+			if err := json.Unmarshal(data, &dto); err == nil {
+				return &model.UserProfile{
+					UserDTO:   dto,
+					Lastvisit: 0,
+				}, nil
+			}
+		}
 	}
 
 	// DB
@@ -178,7 +185,9 @@ func (s *UserService) GetProfile(ctx context.Context, uid int64) (*model.UserPro
 	}
 
 	// Write Cache
-	s.l1.Set(uid, dto)
+	if bytes, _ := json.Marshal(dto); bytes != nil {
+		s.l1.Set(key, bytes)
+	}
 	ctxBg := context.Background()
 	s.l2.Set(ctxBg, key, "1", time.Duration(s.l2Cfg.L2TTL)*time.Second)
 
@@ -187,9 +196,16 @@ func (s *UserService) GetProfile(ctx context.Context, uid int64) (*model.UserPro
 
 // GetUserByID 根据ID获取用户
 func (s *UserService) GetUserByID(ctx context.Context, uid int64) (*model.UserDTO, error) {
+	key := fmt.Sprintf("user:%d", uid)
+
 	// L1
-	if v, ok := s.l1.Get(uid); ok {
-		return v, nil
+	if data, ok := s.l1.Get(key); ok {
+		if data != nil {
+			var dto model.UserDTO
+			if err := json.Unmarshal(data, &dto); err == nil {
+				return &dto, nil
+			}
+		}
 	}
 
 	user, err := s.repo.GetByID(ctx, uid)
@@ -211,7 +227,9 @@ func (s *UserService) GetUserByID(ctx context.Context, uid int64) (*model.UserDT
 	}
 
 	// Write Cache
-	s.l1.Set(uid, dto)
+	if bytes, _ := json.Marshal(dto); bytes != nil {
+		s.l1.Set(key, bytes)
+	}
 
 	return dto, nil
 }

@@ -64,10 +64,10 @@ func newIPChecker(cfg *IPWhitelistConfig) (*ipChecker, error) {
 	return c, nil
 }
 
-// isLocalIP 检查是否是本地 IP (仅 IPv4，禁用 IPv6)
+// isLocalIP 检查是否是本地 IP (支持 IPv4 和 IPv6)
 func isLocalIP(ipStr string) bool {
-	// 检查 localhost (IPv4 only)
-	if ipStr == "localhost" || ipStr == "127.0.0.1" {
+	// 检查 localhost (IPv4 and IPv6)
+	if ipStr == "localhost" || ipStr == "127.0.0.1" || ipStr == "::1" {
 		return true
 	}
 
@@ -77,24 +77,28 @@ func isLocalIP(ipStr string) bool {
 		return false
 	}
 
-	// 只处理 IPv4，拒绝 IPv6
-	ipv4 := ip.To4()
-	if ipv4 == nil {
-		// IPv6 地址直接拒绝
-		return false
+	// 检查 IPv4 内网 IP
+	if ipv4 := ip.To4(); ipv4 != nil {
+		// 192.168.x.x
+		if ipv4[0] == 192 && ipv4[1] == 168 {
+			return true
+		}
+		// 10.x.x.x
+		if ipv4[0] == 10 {
+			return true
+		}
+		// 172.16-31.x.x
+		if ipv4[0] == 172 && ipv4[1] >= 16 && ipv4[1] <= 31 {
+			return true
+		}
+		// 127.x.x.x (loopback)
+		if ipv4[0] == 127 {
+			return true
+		}
 	}
 
-	// 检查内网 IP 段 (IPv4 only)
-	// 192.168.x.x
-	if ipv4[0] == 192 && ipv4[1] == 168 {
-		return true
-	}
-	// 10.x.x.x
-	if ipv4[0] == 10 {
-		return true
-	}
-	// 172.16-31.x.x
-	if ipv4[0] == 172 && ipv4[1] >= 16 && ipv4[1] <= 31 {
+	// 检查 IPv6 loopback
+	if ip.IsLoopback() {
 		return true
 	}
 
@@ -190,41 +194,45 @@ func PublicWhitelistMW() gin.HandlerFunc {
 	}
 }
 
-// isLocalOrAllowedIP 检查是否是本地 IP 或在白名单中 (仅 IPv4，禁用 IPv6)
+// isLocalOrAllowedIP 检查是否是本地 IP 或在白名单中 (支持 IPv4 和 IPv6)
 func isLocalOrAllowedIP(clientIP string, cfg *IPWhitelistConfig, checker *ipChecker) bool {
-	// 1. 检查是否是 localhost/127.0.0.1
-	if clientIP == "localhost" || clientIP == "127.0.0.1" {
+	// 1. 检查是否是 localhost/127.0.0.1/::1
+	if clientIP == "localhost" || clientIP == "127.0.0.1" || clientIP == "::1" {
 		return true
 	}
 
-	// 2. 解析 IP，拒绝 IPv6
+	// 2. 解析 IP
 	ip := net.ParseIP(clientIP)
 	if ip == nil {
 		return false
 	}
 
-	// 只处理 IPv4，拒绝 IPv6
-	ipv4 := ip.To4()
-	if ipv4 == nil {
-		// IPv6 直接拒绝
-		return false
-	}
-
-	// 3. 检查是否是内网 IP (IPv4 only)
-	// 192.168.x.x
-	if ipv4[0] == 192 && ipv4[1] == 168 {
-		return true
-	}
-	// 10.x.x.x
-	if ipv4[0] == 10 {
-		return true
-	}
-	// 172.16-31.x.x
-	if ipv4[0] == 172 && ipv4[1] >= 16 && ipv4[1] <= 31 {
+	// 3. 检查是否是 loopback
+	if ip.IsLoopback() {
 		return true
 	}
 
-	// 4. 检查是否在白名单配置中
+	// 4. 检查 IPv4 内网 IP
+	if ipv4 := ip.To4(); ipv4 != nil {
+		// 192.168.x.x
+		if ipv4[0] == 192 && ipv4[1] == 168 {
+			return true
+		}
+		// 10.x.x.x
+		if ipv4[0] == 10 {
+			return true
+		}
+		// 172.16-31.x.x
+		if ipv4[0] == 172 && ipv4[1] >= 16 && ipv4[1] <= 31 {
+			return true
+		}
+		// 127.x.x.x
+		if ipv4[0] == 127 {
+			return true
+		}
+	}
+
+	// 5. 检查是否在白名单配置中
 	if checker != nil && checker.isAllowed(clientIP) {
 		return true
 	}

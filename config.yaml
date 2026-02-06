@@ -24,15 +24,11 @@ app:
   host: "0.0.0.0"
   port: 8080
   mode: "release"  # debug, release, test
-  read_timeout: 30      # 请求读取超时 (秒)
-  write_timeout: 30     # 响应写入超时 (秒)
-  idle_timeout: 120     # 空闲连接超时 (秒)
 
 # JWT Configuration
 jwt:
   secret: "your-jwt-secret-key-change-in-production"
   expiry: 86400         # Token 过期时间 (秒) - 默认 24 小时
-  refresh_expiry: 604800  # Refresh Token 过期时间 (秒) - 默认 7 天
 
 # Cache Configuration
 cache:
@@ -42,7 +38,6 @@ cache:
 # Snowflake Configuration
 snowflake:
   worker_id: 0
-  datacenter_id: 0
 
 # Logging Configuration
 logging:
@@ -56,47 +51,13 @@ logging:
 # Security Configuration (最重要!)
 security:
   # IP 白名单 - 仅允许这些 IP 访问管理接口
-  # 格式: IP 地址或 CIDR (如 192.168.1.0/24)
-  # 强烈建议: 只保留 127.0.0.1 和 localhost
   allow_ips:
     - "127.0.0.1"
     - "localhost"
     - "192.168.1.0/24"
-  # 示例: 局域网       # 示例: 特定 IP
 
   # IP 黑名单 - 拒绝这些 IP 访问
   deny_ips: []
 
   # API 频率限制 (次/分钟)
-  # 0 表示不限制
   rate_limit: 100
-
-  # CORS 配置
-  cors:
-    # 是否启用 CORS
-    enabled: true
-    # 允许的来源域名列表
-    # 空列表表示允许所有来源，生产环境建议配置具体域名
-    allowed_origins:
-      - "http://localhost:3000"
-      - "http://localhost:8080"
-      - "http://127.0.0.1:8080"
-    # 是否允许携带凭证 (cookies, authorization headers)
-    allow_credentials: true
-    # 预检请求缓存时间 (秒)
-    max_age: 86400
-    # 允许的 HTTP 方法
-    allowed_methods:
-      - "GET"
-      - "POST"
-      - "PUT"
-      - "DELETE"
-      - "PATCH"
-      - "OPTIONS"
-    # 允许的 HTTP 头
-    allowed_headers:
-      - "Content-Type"
-      - "Authorization"
-      - "X-Requested-With"
-      - "Accept"
-      - "Origin"

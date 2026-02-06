@@ -2,13 +2,14 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"well_go/internal/core/config"
 	"well_go/internal/core/logger"
-	"well_go/internal/pkg/pool"
 	"well_go/internal/model"
+	"well_go/internal/pkg/pool"
 	"well_go/internal/repository"
 
 	"github.com/redis/go-redis/v9"
@@ -17,12 +18,12 @@ import (
 
 // TagService Tag 业务服务
 type TagService struct {
-	repo       repository.TagRepository
-	threadTag  repository.ThreadTagRepository
-	l1         *pool.SimpleCache[int, *TagDTO] // L1 缓存
-	l2         *redis.Client
-	sf         *singleflight.Group
-	config     *config.CacheConfig
+	repo      repository.TagRepository
+	threadTag repository.ThreadTagRepository
+	l1        *pool.BigCache // L1 缓存（零GC）
+	l2        *redis.Client
+	sf        *singleflight.Group
+	config    *config.CacheConfig
 }
 
 // TagDTO 标签数据传输对象
@@ -37,10 +38,11 @@ type TagDTO struct {
 
 // NewTagService 创建 TagService 实例
 func NewTagService(repo repository.TagRepository, threadTag repository.ThreadTagRepository, l2 *redis.Client, cfg *config.CacheConfig) *TagService {
+	l1Cache, _ := pool.NewBigCache(cfg.L1Cap, time.Duration(cfg.L2TTL)*time.Second)
 	return &TagService{
 		repo:      repo,
 		threadTag: threadTag,
-		l1:        pool.NewCache[int, *TagDTO](cfg.L1Cap),
+		l1:        l1Cache,
 		l2:        l2,
 		sf:        &singleflight.Group{},
 		config:    cfg,
@@ -52,8 +54,13 @@ func (s *TagService) Get(ctx context.Context, tagID int) (*TagDTO, error) {
 	key := fmt.Sprintf("tag:%d", tagID)
 
 	// L1 Cache
-	if v, ok := s.l1.Get(tagID); ok {
-		return v, nil
+	if data, ok := s.l1.Get(key); ok {
+		if data != nil {
+			var dto TagDTO
+			if err := json.Unmarshal(data, &dto); err == nil {
+				return &dto, nil
+			}
+		}
 	}
 
 	// L2 Cache
@@ -61,7 +68,10 @@ func (s *TagService) Get(ctx context.Context, tagID int) (*TagDTO, error) {
 	if v, err := s.l2.Get(ctxL2, key).Bytes(); err == nil {
 		var dto TagDTO
 		if err := dto.UnmarshalBinary(v); err == nil {
-			s.l1.Set(tagID, &dto)
+			// Write L1
+			if bytes, _ := json.Marshal(&dto); bytes != nil {
+				s.l1.Set(key, bytes)
+			}
 			return &dto, nil
 		}
 	}
@@ -87,7 +97,10 @@ func (s *TagService) Get(ctx context.Context, tagID int) (*TagDTO, error) {
 		if bytes, err := dto.MarshalBinary(); err == nil {
 			s.l2.Set(ctxL2, key, bytes, time.Duration(s.config.L2TTL)*time.Second)
 		}
-		s.l1.Set(tagID, dto)
+		// Write L1
+		if bytes, _ := json.Marshal(&dto); bytes != nil {
+			s.l1.Set(key, bytes)
+		}
 		return dto, nil
 	})
 
@@ -303,23 +316,23 @@ func (s *TagService) FlushCache(ctx context.Context) error {
 // MarshalBinary 序列化
 func (dto *TagDTO) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, 0)
-	
+
 	tagID := dto.TagID
 	buf = append(buf, byte(tagID))
 	buf = append(buf, byte(tagID>>8))
 	buf = append(buf, byte(tagID>>16))
 	buf = append(buf, byte(tagID>>24))
-	
+
 	nameLen := len(dto.Name)
 	buf = append(buf, byte(nameLen))
 	buf = append(buf, []byte(dto.Name)...)
-	
+
 	slugLen := len(dto.Slug)
 	buf = append(buf, byte(slugLen))
 	buf = append(buf, []byte(dto.Slug)...)
-	
+
 	buf = append(buf, byte(dto.Status))
-	
+
 	return buf, nil
 }
 
@@ -328,11 +341,11 @@ func (dto *TagDTO) UnmarshalBinary(data []byte) error {
 	if len(data) < 6 {
 		return fmt.Errorf("invalid data length")
 	}
-	
+
 	offset := 0
 	dto.TagID = int(int64(data[0]) | int64(data[1])<<8 | int64(data[2])<<16 | int64(data[3])<<24)
 	offset = 4
-	
+
 	nameLen := int(data[offset])
 	offset++
 	if len(data) < offset+nameLen {
@@ -340,15 +353,15 @@ func (dto *TagDTO) UnmarshalBinary(data []byte) error {
 	}
 	dto.Name = string(data[offset : offset+nameLen])
 	offset += nameLen
-	
+
 	slugLen := int(data[offset])
 	offset++
 	if len(data) < offset+slugLen {
 		return fmt.Errorf("invalid slug length")
 	}
 	dto.Slug = string(data[offset : offset+slugLen])
-	
+
 	dto.Status = int(data[offset+slugLen])
-	
+
 	return nil
 }

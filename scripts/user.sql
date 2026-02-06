@@ -1,5 +1,5 @@
 -- WellCMS Go User Table
--- 用户表
+-- 用户表（user是MySQL保留字，需要用反引号）
 
 CREATE TABLE IF NOT EXISTS `user` (
   `uid` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',

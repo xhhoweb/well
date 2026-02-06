@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -21,6 +22,7 @@ import (
 	"well_go/internal/middleware"
 	"well_go/internal/repository"
 	"well_go/internal/service"
+	"well_go/internal/service/seo"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -107,7 +109,29 @@ func main() {
 	userV1Handler := v1.NewUserHandler(userSvc)
 	userMgtHandler := mgt.NewUserMgtHandler(userSvc)
 
-	// 11. 创建 IP 限制器
+	// 11. SEO 服务初始化
+	// 注意：0.0.0.0 是监听地址，sitemap 中使用 localhost
+	baseURL := fmt.Sprintf("https://localhost:%d", cfg.App.Port)
+	sitemapConfig := &seo.SitemapConfig{
+		BaseURL:  baseURL,
+		CacheTTL: 5 * time.Minute,
+		MaxURLs:  50000,
+	}
+	robotsConfig := &seo.RobotsConfig{
+		BaseURL: baseURL,
+		Sitemap: baseURL + "/sitemap.xml",
+	}
+
+	// SEO Services
+	sitemapSvc := seo.NewSitemapService(threadRepo, tagRepo, sitemapConfig)
+	robotsSvc := seo.NewRobotsService(robotsConfig)
+	canonicalSvc := seo.NewCanonicalService(baseURL)
+
+	// SEO Handlers
+	sitemapHandler := seo.NewHandler(sitemapSvc)
+	robotsHandler := seo.NewRobotsHandler(robotsSvc)
+
+	// 12. 创建 IP 限制器
 	rateLimiter := middleware.NewIPLimiter(cfg.Security.RateLimit, 60)
 
 	// 12. 注册路由
@@ -119,6 +143,7 @@ func main() {
 	router.Use(middleware.LoggerMiddleware())
 	router.Use(middleware.RateLimitMW(rateLimiter))
 	router.Use(middleware.CORSMiddleware())
+	router.Use(canonicalSvc.CanonicalMW())
 
 	// Health Check (跳过 IP 检查)
 	router.GET("/health", func(c *gin.Context) {
@@ -190,6 +215,12 @@ func main() {
 	// Metrics (跳过 IP 检查)
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
+	// SEO Routes (跳过 IP 检查)
+	router.GET("/robots.txt", robotsHandler.Get)
+	router.GET("/sitemap.xml", sitemapHandler.SitemapIndex)
+	router.GET("/sitemap-thread-:page", sitemapHandler.ThreadSitemap)
+	router.GET("/sitemap-tag.xml", sitemapHandler.TagSitemap)
+
 	// Public API (v1) - Public 白名单（本地/内网跳过）
 	v1Group := router.Group("/api/v1")
 	v1Group.Use(middleware.PublicWhitelistMW())
@@ -217,7 +248,7 @@ func main() {
 	mgtGroup.Use(middleware.AdminWhitelistMW())
 	{
 		mgtGroup.POST("/login", func(c *gin.Context) {
-			mgt.Login(c, &cfg.JWT)
+			mgt.Login(c, userSvc, &cfg.JWT)
 		})
 
 		userMgt := mgtGroup.Group("/user")
@@ -259,19 +290,24 @@ func main() {
 		}
 	}
 
-	// 13. 启动 HTTP Server (带超时配置)
+	// 13. 启动 HTTP Server
 	srv := &http.Server{
-		Addr:         cfg.App.GetServerAddr(),
-		Handler:      router,
-		ReadTimeout:  time.Duration(cfg.App.ReadTimeout) * time.Second,
-		WriteTimeout: time.Duration(cfg.App.WriteTimeout) * time.Second,
-		IdleTimeout:  time.Duration(cfg.App.IdleTimeout) * time.Second,
+		Addr:    cfg.App.GetServerAddr(),
+		Handler: router,
 	}
 
 	go func() {
 		logger.Info("Server starting", logger.String("addr", srv.Addr))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("Server error", logger.String("error", err.Error()))
+		}
+	}()
+
+	// pprof Server (可选，用于性能分析)
+	go func() {
+		logger.Info("PProf server starting", logger.String("addr", "localhost:6060"))
+		if err := http.ListenAndServe("localhost:6060", nil); err != nil && err != http.ErrServerClosed {
+			logger.Error("PProf server error", logger.String("error", err.Error()))
 		}
 	}()
 

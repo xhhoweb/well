@@ -2,14 +2,15 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"well_go/internal/core/config"
 	"well_go/internal/core/logger"
 	"well_go/internal/core/snowflake"
-	"well_go/internal/pkg/pool"
 	"well_go/internal/model"
+	"well_go/internal/pkg/pool"
 	"well_go/internal/repository"
 
 	"github.com/redis/go-redis/v9"
@@ -21,7 +22,7 @@ var ErrThreadNotFound = fmt.Errorf("thread not found")
 // ThreadService Thread业务服务
 type ThreadService struct {
 	repo     repository.ThreadRepository
-	l1       *pool.SimpleCache[int64, *ThreadDTO] // L1 Cache
+	l1       *pool.BigCache // L1 Cache（零GC）
 	l2       *redis.Client
 	sf       *singleflight.Group
 	l2Config *config.CacheConfig
@@ -56,9 +57,12 @@ type ThreadListItem struct {
 
 // NewThreadService 创建ThreadService实例
 func NewThreadService(repo repository.ThreadRepository, l2 *redis.Client, l2Config *config.CacheConfig) *ThreadService {
+	// L1使用bigcache（零GC）
+	l1Cache, _ := pool.NewBigCache(l2Config.L1Cap, time.Duration(l2Config.L2TTL)*time.Second)
+
 	return &ThreadService{
 		repo:     repo,
-		l1:       pool.NewCache[int64, *ThreadDTO](l2Config.L1Cap),
+		l1:       l1Cache,
 		l2:       l2,
 		sf:       &singleflight.Group{},
 		l2Config: l2Config,
@@ -70,8 +74,13 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 	key := fmt.Sprintf("thread:%d", tid)
 
 	// L1 Cache
-	if v, ok := s.l1.Get(tid); ok {
-		return v, nil
+	if data, ok := s.l1.Get(key); ok {
+		if data != nil {
+			var dto ThreadDTO
+			if err := json.Unmarshal(data, &dto); err == nil {
+				return &dto, nil
+			}
+		}
 	}
 
 	// L2 Cache
@@ -79,7 +88,10 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 	if v, err := s.l2.Get(ctxL2, key).Bytes(); err == nil {
 		var dto ThreadDTO
 		if err := dto.UnmarshalBinary(v); err == nil {
-			s.l1.Set(tid, &dto)
+			// Write L1
+			if bytes, _ := json.Marshal(&dto); bytes != nil {
+				s.l1.Set(key, bytes)
+			}
 			return &dto, nil
 		}
 	}
@@ -114,7 +126,10 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 		if bytes, err := dto.MarshalBinary(); err == nil {
 			s.l2.Set(ctxL2, key, bytes, time.Duration(s.l2Config.L2TTL)*time.Second)
 		}
-		s.l1.Set(tid, dto)
+		// Write L1
+		if bytes, _ := json.Marshal(&dto); bytes != nil {
+			s.l1.Set(key, bytes)
+		}
 
 		return dto, nil
 	})
@@ -156,15 +171,15 @@ func (s *ThreadService) Create(ctx context.Context, fid int64, uid int64, subjec
 	tid := snowflake.Generate()
 
 	thread := &model.Thread{
-		Tid:       tid,
-		Fid:       int(fid),
-		Uid:       uid,
-		Subject:   subject,
-		Views:     0,
-		Replies:   0,
-		Dateline:  int(now),
-		Lastpost:  int(now),
-		Status:    0,
+		Tid:      tid,
+		Fid:      int(fid),
+		Uid:      uid,
+		Subject:  subject,
+		Views:    0,
+		Replies:  0,
+		Dateline: int(now),
+		Lastpost: int(now),
+		Status:   0,
 	}
 
 	content := &model.ThreadData{
@@ -210,8 +225,8 @@ func (s *ThreadService) Update(ctx context.Context, tid int64, subject string, s
 	}
 
 	// Invalidate Cache
-	s.l1.Remove(tid)
 	key := fmt.Sprintf("thread:%d", tid)
+	s.l1.Remove(key)
 	s.l2.Del(context.Background(), key)
 
 	return nil
@@ -232,8 +247,8 @@ func (s *ThreadService) Delete(ctx context.Context, tid int64) error {
 	}
 
 	// Invalidate Cache
-	s.l1.Remove(tid)
 	key := fmt.Sprintf("thread:%d", tid)
+	s.l1.Remove(key)
 	s.l2.Del(context.Background(), key)
 
 	return nil
@@ -246,8 +261,8 @@ func (s *ThreadService) IncViews(ctx context.Context, tid int64) error {
 	}
 
 	// Invalidate Cache
-	s.l1.Remove(tid)
 	key := fmt.Sprintf("thread:%d", tid)
+	s.l1.Remove(key)
 	s.l2.Del(context.Background(), key)
 
 	return nil

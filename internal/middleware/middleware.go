@@ -84,60 +84,12 @@ func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 	}
 }
 
-// GzipMiddleware GZIP 压缩中间件
-// 使用方法：
-// 1. 添加依赖：go get github.com/gin-contrib/gzip
-// 2. 在 main.go 中添加：import "github.com/gin-contrib/gzip"
-// 3. 使用：router.Use(gzip.Gzip(gzip.DefaultCompression))
-//
-// 注意：对于大响应 (>1KB) 启用压缩效果最佳
-// 小响应压缩可能不值得（压缩 CPU 开销 > 网络节省）
-
-// CORSMiddleware 跨域中间件 (从配置文件读取)
 func CORSMiddleware() gin.HandlerFunc {
-	cfg := config.Get()
-	corsCfg := cfg.Security.CORS
-
-	// 如果未启用 CORS，直接跳过
-	if !corsCfg.Enabled {
-		return func(c *gin.Context) {
-			c.Next()
-		}
-	}
-
 	return func(c *gin.Context) {
-		origin := c.GetHeader("Origin")
-
-		// 检查来源是否在允许列表中
-		allowed := false
-		if len(corsCfg.AllowedOrigins) == 0 {
-			// 空列表表示允许所有
-			allowed = true
-		} else {
-			for _, o := range corsCfg.AllowedOrigins {
-				if o == origin || o == "*" {
-					allowed = true
-					break
-				}
-			}
-		}
-
-		if allowed {
-			if corsCfg.AllowCredentials {
-				c.Header("Access-Control-Allow-Origin", origin)
-			} else {
-				if origin == "" {
-					c.Header("Access-Control-Allow-Origin", "*")
-				} else {
-					c.Header("Access-Control-Allow-Origin", origin)
-				}
-			}
-		}
-
-		c.Header("Access-Control-Allow-Methods", strings.Join(corsCfg.AllowedMethods, ", "))
-		c.Header("Access-Control-Allow-Headers", strings.Join(corsCfg.AllowedHeaders, ", "))
-		c.Header("Access-Control-Allow-Credentials", fmt.Sprintf("%t", corsCfg.AllowCredentials))
-		c.Header("Access-Control-Max-Age", fmt.Sprintf("%d", corsCfg.MaxAge))
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization")
+		c.Header("Access-Control-Max-Age", "86400")
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
@@ -234,36 +186,4 @@ func GenerateToken(uid int64, username string, role int, cfg *config.JWTConfig) 
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(cfg.Secret))
-}
-
-// GenerateRefreshToken 生成 Refresh Token
-func GenerateRefreshToken(uid int64, cfg *config.JWTConfig) (string, error) {
-	claims := jwt.RegisteredClaims{
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(cfg.RefreshExpiry) * time.Second)),
-		IssuedAt:  jwt.NewNumericDate(time.Now()),
-		Subject:   fmt.Sprintf("refresh:%d", uid),
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(cfg.Secret))
-}
-
-// ValidateRefreshToken 验证 Refresh Token
-func ValidateRefreshToken(tokenString, secret string) (int64, error) {
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		return []byte(secret), nil
-	})
-	if err != nil {
-		return 0, err
-	}
-
-	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-		if subject, ok := claims["sub"].(string); ok {
-			var uid int64
-			fmt.Sscanf(subject, "refresh:%d", &uid)
-			return uid, nil
-		}
-	}
-
-	return 0, fmt.Errorf("invalid refresh token")
 }

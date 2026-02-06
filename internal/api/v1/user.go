@@ -8,7 +8,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// UserHandler 用户公开API
+// UserHandler 用户公开API（内部使用）
+// 注意：User 模块非核心内容模型，仅用于内部认证和基础用户信息
+// 如无特殊需求，建议通过 thread.uid 关联用户信息，不直接暴露用户详情
 type UserHandler struct {
 	svc *service.UserService
 }

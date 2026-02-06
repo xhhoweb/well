@@ -2,13 +2,14 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"well_go/internal/core/config"
 	"well_go/internal/core/logger"
-	"well_go/internal/pkg/pool"
 	"well_go/internal/model"
+	"well_go/internal/pkg/pool"
 	"well_go/internal/repository"
 
 	"github.com/redis/go-redis/v9"
@@ -18,7 +19,7 @@ import (
 // ForumService Forum 业务服务
 type ForumService struct {
 	repo   repository.ForumRepository
-	l1     *pool.SimpleCache[int, *ForumDTO] // L1 缓存
+	l1     *pool.BigCache // L1 缓存（零GC）
 	l2     *redis.Client
 	sf     *singleflight.Group
 	config *config.CacheConfig
@@ -26,16 +27,16 @@ type ForumService struct {
 
 // ForumDTO 版块数据传输对象
 type ForumDTO struct {
-	Fid      int      `json:"fid"`
-	Name     string   `json:"name"`
-	Parent   int      `json:"parent"`
-	Path     string   `json:"path"`
-	Depth    int      `json:"depth"`
-	Order    int      `json:"order"`
-	Threads  int      `json:"threads"`
-	Today    int      `json:"today"`
-	Posts    int      `json:"posts"`
-	Status   int      `json:"status"`
+	Fid     int    `json:"fid"`
+	Name    string `json:"name"`
+	Parent  int    `json:"parent"`
+	Path    string `json:"path"`
+	Depth   int    `json:"depth"`
+	Order   int    `json:"order"`
+	Threads int    `json:"threads"`
+	Today   int    `json:"today"`
+	Posts   int    `json:"posts"`
+	Status  int    `json:"status"`
 }
 
 // ForumTreeNode 论坛树节点
@@ -46,9 +47,10 @@ type ForumTreeNode struct {
 
 // NewForumService 创建 ForumService 实例
 func NewForumService(repo repository.ForumRepository, l2 *redis.Client, cfg *config.CacheConfig) *ForumService {
+	l1Cache, _ := pool.NewBigCache(cfg.L1Cap, time.Duration(cfg.L2TTL)*time.Second)
 	return &ForumService{
 		repo:   repo,
-		l1:     pool.NewCache[int, *ForumDTO](cfg.L1Cap),
+		l1:     l1Cache,
 		l2:     l2,
 		sf:     &singleflight.Group{},
 		config: cfg,
@@ -60,8 +62,13 @@ func (s *ForumService) Get(ctx context.Context, fid int) (*ForumDTO, error) {
 	key := fmt.Sprintf("forum:%d", fid)
 
 	// L1 Cache
-	if v, ok := s.l1.Get(fid); ok {
-		return v, nil
+	if data, ok := s.l1.Get(key); ok {
+		if data != nil {
+			var dto ForumDTO
+			if err := json.Unmarshal(data, &dto); err == nil {
+				return &dto, nil
+			}
+		}
 	}
 
 	// L2 Cache
@@ -69,7 +76,10 @@ func (s *ForumService) Get(ctx context.Context, fid int) (*ForumDTO, error) {
 	if v, err := s.l2.Get(ctxL2, key).Bytes(); err == nil {
 		var dto ForumDTO
 		if err := dto.UnmarshalBinary(v); err == nil {
-			s.l1.Set(fid, &dto)
+			// Write L1
+			if bytes, _ := json.Marshal(&dto); bytes != nil {
+				s.l1.Set(key, bytes)
+			}
 			return &dto, nil
 		}
 	}
@@ -99,7 +109,10 @@ func (s *ForumService) Get(ctx context.Context, fid int) (*ForumDTO, error) {
 		if bytes, err := dto.MarshalBinary(); err == nil {
 			s.l2.Set(ctxL2, key, bytes, time.Duration(s.config.L2TTL)*time.Second)
 		}
-		s.l1.Set(fid, dto)
+		// Write L1
+		if bytes, _ := json.Marshal(&dto); bytes != nil {
+			s.l1.Set(key, bytes)
+		}
 		return dto, nil
 	})
 
@@ -220,12 +233,12 @@ func (s *ForumService) Create(ctx context.Context, name string, parent int) (*Fo
 	}
 
 	return &ForumDTO{
-		Fid:     id,
-		Name:    name,
-		Parent:  parent,
-		Path:    path,
-		Depth:   depth,
-		Status:  0,
+		Fid:    id,
+		Name:   name,
+		Parent: parent,
+		Path:   path,
+		Depth:  depth,
+		Status: 0,
 	}, nil
 }
 
@@ -247,8 +260,8 @@ func (s *ForumService) Update(ctx context.Context, fid int, name string, status 
 	}
 
 	// Invalidate Cache
-	s.l1.Remove(fid)
 	key := fmt.Sprintf("forum:%d", fid)
+	s.l1.Remove(key)
 	s.l2.Del(context.Background(), key)
 
 	return nil
@@ -269,9 +282,9 @@ func (s *ForumService) Delete(ctx context.Context, fid int) error {
 	}
 
 	// Invalidate Cache
-	s.l1.Remove(fid)
-	s.l1.Flush() // 简单起见，删除时刷新整个缓存
 	key := fmt.Sprintf("forum:%d", fid)
+	s.l1.Remove(key)
+	s.l1.Flush() // 简单起见，删除时刷新整个缓存
 	s.l2.Del(context.Background(), key)
 
 	return nil
@@ -294,18 +307,18 @@ func (dto *ForumDTO) MarshalBinary() ([]byte, error) {
 	buf = append(buf, byte(dto.Fid>>40))
 	buf = append(buf, byte(dto.Fid>>48))
 	buf = append(buf, byte(dto.Fid>>56))
-	
+
 	nameLen := len(dto.Name)
 	buf = append(buf, byte(nameLen))
 	buf = append(buf, []byte(dto.Name)...)
-	
+
 	buf = append(buf, byte(dto.Parent))
 	buf = append(buf, byte(dto.Parent>>8))
 	buf = append(buf, byte(dto.Parent>>16))
 	buf = append(buf, byte(dto.Parent>>24))
-	
+
 	buf = append(buf, byte(dto.Status))
-	
+
 	return buf, nil
 }
 
@@ -314,12 +327,12 @@ func (dto *ForumDTO) UnmarshalBinary(data []byte) error {
 	if len(data) < 10 {
 		return fmt.Errorf("invalid data length")
 	}
-	
+
 	offset := 0
-	dto.Fid = int(int64(data[0]) | int64(data[1])<<8 | int64(data[2])<<16 | int64(data[3])<<24 | 
+	dto.Fid = int(int64(data[0]) | int64(data[1])<<8 | int64(data[2])<<16 | int64(data[3])<<24 |
 		int64(data[4])<<32 | int64(data[5])<<40 | int64(data[6])<<48 | int64(data[7])<<56)
 	offset = 8
-	
+
 	nameLen := int(data[offset])
 	offset++
 	if len(data) < offset+nameLen {
@@ -327,11 +340,11 @@ func (dto *ForumDTO) UnmarshalBinary(data []byte) error {
 	}
 	dto.Name = string(data[offset : offset+nameLen])
 	offset += nameLen
-	
+
 	dto.Parent = int(int64(data[offset]) | int64(data[offset+1])<<8 | int64(data[offset+2])<<16 | int64(data[offset+3])<<24)
 	offset += 4
-	
+
 	dto.Status = int(data[offset])
-	
+
 	return nil
 }

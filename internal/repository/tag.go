@@ -23,6 +23,8 @@ type TagRepository interface {
 	Delete(ctx context.Context, tagID int) error
 	IncThreads(ctx context.Context, tagID int) error
 	IncView(ctx context.Context, tagID int) error
+	// Sitemap 专用方法
+	GetSitemapList(ctx context.Context, offset, limit int) ([]*model.Tag, error)
 }
 
 // tagRepository Tag 数据访问实现
@@ -151,6 +153,18 @@ func (r *tagRepository) IncThreads(ctx context.Context, tagID int) error {
 func (r *tagRepository) IncView(ctx context.Context, tagID int) error {
 	_, err := r.db.ExecContext(ctx, "UPDATE tag SET view = view + 1 WHERE tag_id = ?", tagID)
 	return err
+}
+
+// GetSitemapList 获取sitemap列表
+func (r *tagRepository) GetSitemapList(ctx context.Context, offset, limit int) ([]*model.Tag, error) {
+	var tags []*model.Tag
+	err := r.db.SelectContext(ctx, &tags,
+		"SELECT tag_id, name, slug FROM tag WHERE status = 0 ORDER BY threads DESC LIMIT ?, ?",
+		offset, limit)
+	if err != nil {
+		return nil, err
+	}
+	return tags, nil
 }
 
 // generateSlug 生成拼音 slug

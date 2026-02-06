@@ -20,6 +20,9 @@ type ThreadRepository interface {
 	Delete(ctx context.Context, tid int64) error
 	IncViews(ctx context.Context, tid int64) error
 	IncReplies(ctx context.Context, tid int64) error
+	// Sitemap 专用方法
+	GetSitemapList(ctx context.Context, offset, limit int) ([]*model.Thread, error)
+	Count(ctx context.Context) (int, error)
 }
 
 // threadRepository Thread数据访问实现
@@ -141,4 +144,26 @@ func (r *threadRepository) IncViews(ctx context.Context, tid int64) error {
 func (r *threadRepository) IncReplies(ctx context.Context, tid int64) error {
 	_, err := r.db.ExecContext(ctx, "UPDATE thread SET replies = replies + 1, lastpost = ? WHERE tid = ?", time.Now().Unix(), tid)
 	return err
+}
+
+// GetSitemapList 获取sitemap列表（只取tid和lastpost）
+func (r *threadRepository) GetSitemapList(ctx context.Context, offset, limit int) ([]*model.Thread, error) {
+	var threads []*model.Thread
+	err := r.db.SelectContext(ctx, &threads,
+		"SELECT tid, lastpost FROM thread ORDER BY tid ASC LIMIT ?, ?",
+		offset, limit)
+	if err != nil {
+		return nil, err
+	}
+	return threads, nil
+}
+
+// Count 获取线程总数
+func (r *threadRepository) Count(ctx context.Context) (int, error) {
+	var count int
+	err := r.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM thread")
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }

@@ -45,29 +45,15 @@ type RedisConfig struct {
 
 // AppConfig Application Configuration
 type AppConfig struct {
-	Host         string
-	Port         int
-	Mode         string
-	ReadTimeout  int // 秒
-	WriteTimeout int // 秒
-	IdleTimeout  int // 秒
+	Host string
+	Port int
+	Mode string
 }
 
 // JWTConfig JWT Configuration
 type JWTConfig struct {
-	Secret        string
-	Expiry        int // Token 过期时间 (秒)
-	RefreshExpiry int // Refresh Token 过期时间 (秒)
-}
-
-// CORSConfig CORS Configuration
-type CORSConfig struct {
-	Enabled          bool
-	AllowedOrigins   []string
-	AllowedMethods   []string
-	AllowedHeaders   []string
-	AllowCredentials bool
-	MaxAge           int
+	Secret string
+	Expiry int // Token过期时间(秒)
 }
 
 // CacheConfig Cache Configuration
@@ -93,10 +79,9 @@ type LoggingConfig struct {
 
 // SecurityConfig Security Configuration
 type SecurityConfig struct {
-	AllowIPs  []string   // IP 白名单
-	DenyIPs   []string   // IP 黑名单
-	RateLimit int        // 频率限制
-	CORS      CORSConfig // CORS 配置
+	AllowIPs  []string // IP白名单
+	DenyIPs   []string // IP黑名单
+	RateLimit int      // 频率限制
 }
 
 // Init Initialize configuration with Viper
@@ -140,9 +125,6 @@ func setDefaults() {
 	v.SetDefault("app.host", "0.0.0.0")
 	v.SetDefault("app.port", 8080)
 	v.SetDefault("app.mode", "release")
-	v.SetDefault("app.read_timeout", 30)
-	v.SetDefault("app.write_timeout", 30)
-	v.SetDefault("app.idle_timeout", 120)
 
 	v.SetDefault("database.host", "127.0.0.1")
 	v.SetDefault("database.port", 3306)
@@ -161,16 +143,9 @@ func setDefaults() {
 
 	v.SetDefault("jwt.secret", "change-me-in-production")
 	v.SetDefault("jwt.expiry", 86400)
-	v.SetDefault("jwt.refresh_expiry", 604800)
 
-	v.SetDefault("security.allow_ips", []string{"127.0.0.1", "localhost"})
+	v.SetDefault("security.allow_ips", []string{"127.0.0.1", "localhost", "::1"})
 	v.SetDefault("security.rate_limit", 100)
-
-	v.SetDefault("security.cors.enabled", true)
-	v.SetDefault("security.cors.allow_credentials", true)
-	v.SetDefault("security.cors.max_age", 86400)
-	v.SetDefault("security.cors.allowed_methods", []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"})
-	v.SetDefault("security.cors.allowed_headers", []string{"Content-Type", "Authorization", "X-Requested-With"})
 
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("logging.output", "stdout")
@@ -217,14 +192,10 @@ func parseConfig() error {
 	cfg.App.Host = v.GetString("app.host")
 	cfg.App.Port = v.GetInt("app.port")
 	cfg.App.Mode = v.GetString("app.mode")
-	cfg.App.ReadTimeout = v.GetInt("app.read_timeout")
-	cfg.App.WriteTimeout = v.GetInt("app.write_timeout")
-	cfg.App.IdleTimeout = v.GetInt("app.idle_timeout")
 
 	// JWT
 	cfg.JWT.Secret = v.GetString("jwt.secret")
 	cfg.JWT.Expiry = v.GetInt("jwt.expiry")
-	cfg.JWT.RefreshExpiry = v.GetInt("jwt.refresh_expiry")
 
 	// Cache
 	cfg.Cache.L1Cap = v.GetInt("cache.l1_cap")
@@ -245,14 +216,6 @@ func parseConfig() error {
 	cfg.Security.AllowIPs = v.GetStringSlice("security.allow_ips")
 	cfg.Security.DenyIPs = v.GetStringSlice("security.deny_ips")
 	cfg.Security.RateLimit = v.GetInt("security.rate_limit")
-
-	// CORS
-	cfg.Security.CORS.Enabled = v.GetBool("security.cors.enabled")
-	cfg.Security.CORS.AllowedOrigins = v.GetStringSlice("security.cors.allowed_origins")
-	cfg.Security.CORS.AllowedMethods = v.GetStringSlice("security.cors.allowed_methods")
-	cfg.Security.CORS.AllowedHeaders = v.GetStringSlice("security.cors.allowed_headers")
-	cfg.Security.CORS.AllowCredentials = v.GetBool("security.cors.allow_credentials")
-	cfg.Security.CORS.MaxAge = v.GetInt("security.cors.max_age")
 
 	return nil
 }
