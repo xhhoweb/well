@@ -74,11 +74,13 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 	key := fmt.Sprintf("thread:%d", tid)
 
 	// L1 Cache
-	if data, ok := s.l1.Get(key); ok {
-		if data != nil {
-			var dto ThreadDTO
-			if err := json.Unmarshal(data, &dto); err == nil {
-				return &dto, nil
+	if s.l1 != nil {
+		if data, ok := s.l1.Get(key); ok {
+			if data != nil {
+				var dto ThreadDTO
+				if err := json.Unmarshal(data, &dto); err == nil {
+					return &dto, nil
+				}
 			}
 		}
 	}
@@ -88,9 +90,10 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 	if v, err := s.l2.Get(ctxL2, key).Bytes(); err == nil {
 		var dto ThreadDTO
 		if err := dto.UnmarshalBinary(v); err == nil {
-			// Write L1
-			if bytes, _ := json.Marshal(&dto); bytes != nil {
-				s.l1.Set(key, bytes)
+			if s.l1 != nil {
+				if bytes, _ := json.Marshal(&dto); bytes != nil {
+					s.l1.Set(key, bytes)
+				}
 			}
 			return &dto, nil
 		}
@@ -126,9 +129,10 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 		if bytes, err := dto.MarshalBinary(); err == nil {
 			s.l2.Set(ctxL2, key, bytes, time.Duration(s.l2Config.L2TTL)*time.Second)
 		}
-		// Write L1
-		if bytes, _ := json.Marshal(&dto); bytes != nil {
-			s.l1.Set(key, bytes)
+		if s.l1 != nil {
+			if bytes, _ := json.Marshal(&dto); bytes != nil {
+				s.l1.Set(key, bytes)
+			}
 		}
 
 		return dto, nil
@@ -137,13 +141,45 @@ func (s *ThreadService) Get(ctx context.Context, tid int64) (*ThreadDTO, error) 
 	if err != nil {
 		return nil, err
 	}
+	if v == nil {
+		return nil, nil
+	}
 	return v.(*ThreadDTO), nil
 }
 
 // List 获取Thread列表
 func (s *ThreadService) List(ctx context.Context, fid int, page, pageSize int) ([]*ThreadListItem, error) {
+	key := fmt.Sprintf("thread:list:%d:%d:%d", fid, page, pageSize)
+
+	if s.l1 != nil {
+		if data, ok := s.l1.Get(key); ok && data != nil {
+			var list []*ThreadListItem
+			if err := json.Unmarshal(data, &list); err == nil {
+				return list, nil
+			}
+		}
+	}
+
+	if data, err := s.l2.Get(ctx, key).Bytes(); err == nil {
+		var list []*ThreadListItem
+		if err := json.Unmarshal(data, &list); err == nil {
+			if s.l1 != nil {
+				s.l1.Set(key, data)
+			}
+			return list, nil
+		}
+	}
+
 	offset := (page - 1) * pageSize
-	threads, err := s.repo.GetByFid(ctx, fid, offset, pageSize)
+	tids, err := s.repo.GetListTIDsByFid(ctx, fid, offset, pageSize)
+	if err != nil {
+		return nil, err
+	}
+	if len(tids) == 0 {
+		return []*ThreadListItem{}, nil
+	}
+
+	threads, err := s.repo.GetByTIDs(ctx, tids)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +198,14 @@ func (s *ThreadService) List(ctx context.Context, fid int, page, pageSize int) (
 			Status:   t.Status,
 		})
 	}
+
+	if data, _ := json.Marshal(list); data != nil {
+		if s.l1 != nil {
+			s.l1.Set(key, data)
+		}
+		s.l2.Set(ctx, key, data, time.Duration(s.l2Config.L2TTL)*time.Second)
+	}
+
 	return list, nil
 }
 
@@ -226,7 +270,9 @@ func (s *ThreadService) Update(ctx context.Context, tid int64, subject string, s
 
 	// Invalidate Cache
 	key := fmt.Sprintf("thread:%d", tid)
-	s.l1.Remove(key)
+	if s.l1 != nil {
+		s.l1.Remove(key)
+	}
 	s.l2.Del(context.Background(), key)
 
 	return nil
@@ -248,7 +294,9 @@ func (s *ThreadService) Delete(ctx context.Context, tid int64) error {
 
 	// Invalidate Cache
 	key := fmt.Sprintf("thread:%d", tid)
-	s.l1.Remove(key)
+	if s.l1 != nil {
+		s.l1.Remove(key)
+	}
 	s.l2.Del(context.Background(), key)
 
 	return nil
@@ -262,7 +310,9 @@ func (s *ThreadService) IncViews(ctx context.Context, tid int64) error {
 
 	// Invalidate Cache
 	key := fmt.Sprintf("thread:%d", tid)
-	s.l1.Remove(key)
+	if s.l1 != nil {
+		s.l1.Remove(key)
+	}
 	s.l2.Del(context.Background(), key)
 
 	return nil
@@ -270,7 +320,9 @@ func (s *ThreadService) IncViews(ctx context.Context, tid int64) error {
 
 // FlushCache 刷新缓存
 func (s *ThreadService) FlushCache(ctx context.Context) error {
-	s.l1.Flush()
+	if s.l1 != nil {
+		s.l1.Flush()
+	}
 	// Redis flush 需要单独处理
 	return nil
 }

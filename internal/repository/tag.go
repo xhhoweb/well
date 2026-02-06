@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 
 	"well_go/internal/model"
@@ -17,14 +18,38 @@ type TagRepository interface {
 	GetBySlug(ctx context.Context, slug string) (*model.Tag, error)
 	GetAll(ctx context.Context) ([]*model.Tag, error)
 	GetHot(ctx context.Context, limit int) ([]*model.Tag, error)
+	GetByIDs(ctx context.Context, tagIDs []int) ([]*model.Tag, error)
 	GetByThread(ctx context.Context, tid int64) ([]*model.Tag, error)
 	Create(ctx context.Context, tag *model.Tag) (int, error)
 	Update(ctx context.Context, tag *model.Tag) error
 	Delete(ctx context.Context, tagID int) error
 	IncThreads(ctx context.Context, tagID int) error
+	DecThreads(ctx context.Context, tagID int) error
 	IncView(ctx context.Context, tagID int) error
 	// Sitemap 专用方法
 	GetSitemapList(ctx context.Context, offset, limit int) ([]*model.Tag, error)
+}
+
+// GetByIDs 根据 ID 列表批量获取 Tag（避免 thread_tag join）
+func (r *tagRepository) GetByIDs(ctx context.Context, tagIDs []int) ([]*model.Tag, error) {
+	if len(tagIDs) == 0 {
+		return []*model.Tag{}, nil
+	}
+
+	placeholders := make([]string, 0, len(tagIDs))
+	args := make([]interface{}, 0, len(tagIDs))
+	for _, id := range tagIDs {
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+
+	query := fmt.Sprintf("SELECT tag_id, name, slug, threads, view, status FROM tag WHERE tag_id IN (%s)", strings.Join(placeholders, ","))
+
+	var tags []*model.Tag
+	if err := r.db.SelectContext(ctx, &tags, query, args...); err != nil {
+		return nil, err
+	}
+	return tags, nil
 }
 
 // tagRepository Tag 数据访问实现
@@ -146,6 +171,12 @@ func (r *tagRepository) Delete(ctx context.Context, tagID int) error {
 // IncThreads 增加关联主题数
 func (r *tagRepository) IncThreads(ctx context.Context, tagID int) error {
 	_, err := r.db.ExecContext(ctx, "UPDATE tag SET threads = threads + 1 WHERE tag_id = ?", tagID)
+	return err
+}
+
+// DecThreads 减少关联主题数
+func (r *tagRepository) DecThreads(ctx context.Context, tagID int) error {
+	_, err := r.db.ExecContext(ctx, "UPDATE tag SET threads = GREATEST(threads - 1, 0) WHERE tag_id = ?", tagID)
 	return err
 }
 

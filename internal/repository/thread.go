@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 	"time"
 
 	"well_go/internal/model"
@@ -15,6 +17,8 @@ type ThreadRepository interface {
 	GetByID(ctx context.Context, tid int64) (*model.Thread, error)
 	GetContentByID(ctx context.Context, tid int64) (*model.ThreadData, error)
 	GetByFid(ctx context.Context, fid int, offset, limit int) ([]*model.Thread, error)
+	GetListTIDsByFid(ctx context.Context, fid int, offset, limit int) ([]int64, error)
+	GetByTIDs(ctx context.Context, tids []int64) ([]*model.Thread, error)
 	Create(ctx context.Context, thread *model.Thread, content *model.ThreadData) (int64, error)
 	Update(ctx context.Context, thread *model.Thread) error
 	Delete(ctx context.Context, tid int64) error
@@ -23,6 +27,51 @@ type ThreadRepository interface {
 	// Sitemap 专用方法
 	GetSitemapList(ctx context.Context, offset, limit int) ([]*model.Thread, error)
 	Count(ctx context.Context) (int, error)
+}
+
+// GetListTIDsByFid 根据Fid获取列表页tid（轻查询，减少回表字段）
+func (r *threadRepository) GetListTIDsByFid(ctx context.Context, fid int, offset, limit int) ([]int64, error) {
+	var tids []int64
+	err := r.db.SelectContext(ctx, &tids,
+		"SELECT tid FROM thread WHERE fid = ? ORDER BY lastpost DESC LIMIT ?, ?",
+		fid, offset, limit)
+	if err != nil {
+		return nil, err
+	}
+	return tids, nil
+}
+
+// GetByTIDs 批量按tid获取主题（保持输入顺序）
+func (r *threadRepository) GetByTIDs(ctx context.Context, tids []int64) ([]*model.Thread, error) {
+	if len(tids) == 0 {
+		return []*model.Thread{}, nil
+	}
+
+	placeholders := make([]string, 0, len(tids))
+	args := make([]interface{}, 0, len(tids)*2)
+	for _, tid := range tids {
+		placeholders = append(placeholders, "?")
+		args = append(args, tid)
+	}
+
+	fieldParts := make([]string, 0, len(tids))
+	for _, tid := range tids {
+		fieldParts = append(fieldParts, "?")
+		args = append(args, tid)
+	}
+
+	query := fmt.Sprintf(
+		"SELECT tid, fid, uid, subject, views, replies, dateline, lastpost, status FROM thread WHERE tid IN (%s) ORDER BY FIELD(tid, %s)",
+		strings.Join(placeholders, ","),
+		strings.Join(fieldParts, ","),
+	)
+
+	var threads []*model.Thread
+	err := r.db.SelectContext(ctx, &threads, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return threads, nil
 }
 
 // threadRepository Thread数据访问实现

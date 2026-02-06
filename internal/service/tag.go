@@ -54,11 +54,13 @@ func (s *TagService) Get(ctx context.Context, tagID int) (*TagDTO, error) {
 	key := fmt.Sprintf("tag:%d", tagID)
 
 	// L1 Cache
-	if data, ok := s.l1.Get(key); ok {
-		if data != nil {
-			var dto TagDTO
-			if err := json.Unmarshal(data, &dto); err == nil {
-				return &dto, nil
+	if s.l1 != nil {
+		if data, ok := s.l1.Get(key); ok {
+			if data != nil {
+				var dto TagDTO
+				if err := json.Unmarshal(data, &dto); err == nil {
+					return &dto, nil
+				}
 			}
 		}
 	}
@@ -69,8 +71,10 @@ func (s *TagService) Get(ctx context.Context, tagID int) (*TagDTO, error) {
 		var dto TagDTO
 		if err := dto.UnmarshalBinary(v); err == nil {
 			// Write L1
-			if bytes, _ := json.Marshal(&dto); bytes != nil {
-				s.l1.Set(key, bytes)
+			if s.l1 != nil {
+				if bytes, _ := json.Marshal(&dto); bytes != nil {
+					s.l1.Set(key, bytes)
+				}
 			}
 			return &dto, nil
 		}
@@ -98,14 +102,19 @@ func (s *TagService) Get(ctx context.Context, tagID int) (*TagDTO, error) {
 			s.l2.Set(ctxL2, key, bytes, time.Duration(s.config.L2TTL)*time.Second)
 		}
 		// Write L1
-		if bytes, _ := json.Marshal(&dto); bytes != nil {
-			s.l1.Set(key, bytes)
+		if s.l1 != nil {
+			if bytes, _ := json.Marshal(&dto); bytes != nil {
+				s.l1.Set(key, bytes)
+			}
 		}
 		return dto, nil
 	})
 
 	if err != nil {
 		return nil, err
+	}
+	if v == nil {
+		return nil, nil
 	}
 	return v.(*TagDTO), nil
 }
@@ -173,13 +182,50 @@ func (s *TagService) GetHot(ctx context.Context, limit int) ([]*TagDTO, error) {
 
 // GetByThread 获取主题关联的 Tag
 func (s *TagService) GetByThread(ctx context.Context, tid int64) ([]*TagDTO, error) {
-	tags, err := s.repo.GetByThread(ctx, tid)
+	key := fmt.Sprintf("thread:tags:%d", tid)
+
+	if s.l1 != nil {
+		if data, ok := s.l1.Get(key); ok && data != nil {
+			var list []*TagDTO
+			if err := json.Unmarshal(data, &list); err == nil {
+				return list, nil
+			}
+		}
+	}
+
+	if data, err := s.l2.Get(ctx, key).Bytes(); err == nil {
+		var list []*TagDTO
+		if err := json.Unmarshal(data, &list); err == nil {
+			if s.l1 != nil {
+				s.l1.Set(key, data)
+			}
+			return list, nil
+		}
+	}
+
+	tagIDs, err := s.threadTag.GetByThread(ctx, tid)
+	if err != nil {
+		return nil, err
+	}
+	if len(tagIDs) == 0 {
+		return []*TagDTO{}, nil
+	}
+
+	tags, err := s.repo.GetByIDs(ctx, tagIDs)
 	if err != nil {
 		return nil, err
 	}
 
-	list := make([]*TagDTO, 0, len(tags))
+	list := make([]*TagDTO, 0, len(tagIDs))
+	tagMap := make(map[int]*model.Tag, len(tags))
 	for _, t := range tags {
+		tagMap[t.TagID] = t
+	}
+	for _, tagID := range tagIDs {
+		t, ok := tagMap[tagID]
+		if !ok {
+			continue
+		}
 		list = append(list, &TagDTO{
 			TagID:   t.TagID,
 			Name:    t.Name,
@@ -189,7 +235,23 @@ func (s *TagService) GetByThread(ctx context.Context, tid int64) ([]*TagDTO, err
 			Status:  t.Status,
 		})
 	}
+
+	if data, _ := json.Marshal(list); data != nil {
+		if s.l1 != nil {
+			s.l1.Set(key, data)
+		}
+		s.l2.Set(ctx, key, data, time.Duration(s.config.L2TTL)*time.Second)
+	}
+
 	return list, nil
+}
+
+func (s *TagService) invalidateThreadTagCache(ctx context.Context, tid int64) {
+	key := fmt.Sprintf("thread:tags:%d", tid)
+	if s.l1 != nil {
+		s.l1.Remove(key)
+	}
+	s.l2.Del(ctx, key)
 }
 
 // Create 创建 Tag
@@ -283,7 +345,11 @@ func (s *TagService) AddToThread(ctx context.Context, tid int64, tagName string)
 	}
 
 	// 增加 Tag 关联数
-	return s.repo.IncThreads(ctx, tag.TagID)
+	if err := s.repo.IncThreads(ctx, tag.TagID); err != nil {
+		return err
+	}
+	s.invalidateThreadTagCache(ctx, tid)
+	return nil
 }
 
 // RemoveFromThread 将 Tag 从主题移除
@@ -296,10 +362,13 @@ func (s *TagService) RemoveFromThread(ctx context.Context, tid int64, tagID int)
 
 	for _, id := range tagIDs {
 		if id == tagID {
-			// 这里简化处理，实际应该删除指定的关联
-			_ = s.threadTag.DeleteByThread(ctx, tid)
-			// 减少关联数
-			s.repo.IncThreads(ctx, tagID)
+			if err := s.threadTag.Delete(ctx, tid, tagID); err != nil {
+				return err
+			}
+			if err := s.repo.DecThreads(ctx, tagID); err != nil {
+				return err
+			}
+			s.invalidateThreadTagCache(ctx, tid)
 			return nil
 		}
 	}
@@ -309,7 +378,9 @@ func (s *TagService) RemoveFromThread(ctx context.Context, tid int64, tagID int)
 
 // FlushCache 刷新缓存
 func (s *TagService) FlushCache(ctx context.Context) error {
-	s.l1.Flush()
+	if s.l1 != nil {
+		s.l1.Flush()
+	}
 	return nil
 }
 

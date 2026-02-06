@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"well_go/internal/core/config"
@@ -14,6 +15,7 @@ import (
 	"well_go/internal/pkg/pool"
 	"well_go/internal/repository"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/sync/singleflight"
@@ -147,14 +149,26 @@ func (s *UserService) GetProfile(ctx context.Context, uid int64) (*model.UserPro
 	key := fmt.Sprintf("user:profile:%d", uid)
 
 	// L1
-	if data, ok := s.l1.Get(key); ok {
+	if s.l1 != nil {
+		if data, ok := s.l1.Get(key); ok {
+			if data != nil {
+				var profile model.UserProfile
+				if err := json.Unmarshal(data, &profile); err == nil {
+					return &profile, nil
+				}
+			}
+		}
+	}
+
+	// L2
+	if data, err := s.l2.Get(ctx, key).Bytes(); err == nil {
 		if data != nil {
-			var dto model.UserDTO
-			if err := json.Unmarshal(data, &dto); err == nil {
-				return &model.UserProfile{
-					UserDTO:   dto,
-					Lastvisit: 0,
-				}, nil
+			var profile model.UserProfile
+			if err := json.Unmarshal(data, &profile); err == nil {
+				if s.l1 != nil {
+					s.l1.Set(key, data)
+				}
+				return &profile, nil
 			}
 		}
 	}
@@ -185,11 +199,12 @@ func (s *UserService) GetProfile(ctx context.Context, uid int64) (*model.UserPro
 	}
 
 	// Write Cache
-	if bytes, _ := json.Marshal(dto); bytes != nil {
-		s.l1.Set(key, bytes)
+	if bytes, _ := json.Marshal(profile); bytes != nil {
+		if s.l1 != nil {
+			s.l1.Set(key, bytes)
+		}
+		s.l2.Set(ctx, key, bytes, time.Duration(s.l2Cfg.L2TTL)*time.Second)
 	}
-	ctxBg := context.Background()
-	s.l2.Set(ctxBg, key, "1", time.Duration(s.l2Cfg.L2TTL)*time.Second)
 
 	return profile, nil
 }
@@ -199,11 +214,13 @@ func (s *UserService) GetUserByID(ctx context.Context, uid int64) (*model.UserDT
 	key := fmt.Sprintf("user:%d", uid)
 
 	// L1
-	if data, ok := s.l1.Get(key); ok {
-		if data != nil {
-			var dto model.UserDTO
-			if err := json.Unmarshal(data, &dto); err == nil {
-				return &dto, nil
+	if s.l1 != nil {
+		if data, ok := s.l1.Get(key); ok {
+			if data != nil {
+				var dto model.UserDTO
+				if err := json.Unmarshal(data, &dto); err == nil {
+					return &dto, nil
+				}
 			}
 		}
 	}
@@ -228,14 +245,87 @@ func (s *UserService) GetUserByID(ctx context.Context, uid int64) (*model.UserDT
 
 	// Write Cache
 	if bytes, _ := json.Marshal(dto); bytes != nil {
-		s.l1.Set(key, bytes)
+		if s.l1 != nil {
+			s.l1.Set(key, bytes)
+		}
 	}
 
 	return dto, nil
 }
 
+// GetUsersByIDs 批量获取用户（用于列表/首页聚合，避免 N+1 查询）
+func (s *UserService) GetUsersByIDs(ctx context.Context, uids []int64) (map[int64]*model.UserDTO, error) {
+	result := make(map[int64]*model.UserDTO, len(uids))
+	if len(uids) == 0 {
+		return result, nil
+	}
+
+	unique := make(map[int64]struct{}, len(uids))
+	missing := make([]int64, 0, len(uids))
+
+	for _, uid := range uids {
+		if uid <= 0 {
+			continue
+		}
+		if _, ok := unique[uid]; ok {
+			continue
+		}
+		unique[uid] = struct{}{}
+
+		key := fmt.Sprintf("user:%d", uid)
+		if s.l1 != nil {
+			if data, ok := s.l1.Get(key); ok && data != nil {
+				var dto model.UserDTO
+				if err := json.Unmarshal(data, &dto); err == nil {
+					result[uid] = &dto
+					continue
+				}
+			}
+		}
+		missing = append(missing, uid)
+	}
+
+	if len(missing) == 0 {
+		return result, nil
+	}
+
+	// 保持稳定顺序，方便排查和复用
+	sort.Slice(missing, func(i, j int) bool { return missing[i] < missing[j] })
+
+	users, err := s.repo.GetByIDs(ctx, missing)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, u := range users {
+		dto := &model.UserDTO{
+			Uid:      u.Uid,
+			Username: u.Username,
+			Email:    u.Email,
+			Avatar:   u.Avatar,
+			Role:     u.Role,
+			Status:   u.Status,
+			Dateline: u.Dateline,
+		}
+		result[u.Uid] = dto
+
+		if data, _ := json.Marshal(dto); data != nil {
+			if s.l1 != nil {
+				s.l1.Set(fmt.Sprintf("user:%d", u.Uid), data)
+			}
+		}
+	}
+
+	return result, nil
+}
+
 // generateJWT 生成JWT（简化版）
 func generateJWT(uid int64, role int, cfg *config.JWTConfig) (string, error) {
-	// TODO: 实现完整JWT生成
-	return "", nil
+	claims := jwt.MapClaims{
+		"uid":  uid,
+		"role": role,
+		"exp":  time.Now().Add(time.Duration(cfg.Expiry) * time.Second).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(cfg.Secret))
 }

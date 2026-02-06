@@ -11,8 +11,9 @@ import (
 // ThreadTagRepository ThreadTag 数据访问接口
 type ThreadTagRepository interface {
 	GetByThread(ctx context.Context, tid int64) ([]int, error) // 返回 tagID 列表
-	GetByTag(ctx context.Context, tagID int) ([]int64, error) // 返回 tid 列表
+	GetByTag(ctx context.Context, tagID int) ([]int64, error)  // 返回 tid 列表
 	Create(ctx context.Context, tt *model.ThreadTag) error
+	Delete(ctx context.Context, tid int64, tagID int) error
 	DeleteByThread(ctx context.Context, tid int64) error
 	DeleteByTag(ctx context.Context, tagID int) error
 }
@@ -52,6 +53,12 @@ func (r *threadTagRepository) Create(ctx context.Context, tt *model.ThreadTag) e
 	_, err := r.db.ExecContext(ctx,
 		"INSERT INTO thread_tag (tid, tag_id) VALUES (?, ?)",
 		tt.Tid, tt.TagID)
+	return err
+}
+
+// Delete 删除指定关联
+func (r *threadTagRepository) Delete(ctx context.Context, tid int64, tagID int) error {
+	_, err := r.db.ExecContext(ctx, "DELETE FROM thread_tag WHERE tid = ? AND tag_id = ?", tid, tagID)
 	return err
 }
 

@@ -1,7 +1,9 @@
 package v1
 
 import (
+	"context"
 	"strconv"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"well_go/internal/pkg/response"
@@ -10,12 +12,14 @@ import (
 
 // ThreadHandler Thread API Handler
 type ThreadHandler struct {
-	svc *service.ThreadService
+	svc     *service.ThreadService
+	tagSvc  *service.TagService
+	userSvc *service.UserService
 }
 
 // NewThreadHandler 创建ThreadHandler
-func NewThreadHandler(svc *service.ThreadService) *ThreadHandler {
-	return &ThreadHandler{svc: svc}
+func NewThreadHandler(svc *service.ThreadService, tagSvc *service.TagService, userSvc *service.UserService) *ThreadHandler {
+	return &ThreadHandler{svc: svc, tagSvc: tagSvc, userSvc: userSvc}
 }
 
 // List GET /api/v1/threads
@@ -53,8 +57,19 @@ func (h *ThreadHandler) List(c *gin.Context) {
 		return
 	}
 
+	uids := make([]int64, 0, len(list))
+	for _, item := range list {
+		uids = append(uids, item.Uid)
+	}
+	users, err := h.userSvc.GetUsersByIDs(c.Request.Context(), uids)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+
 	response.Success(c, gin.H{
 		"list":      list,
+		"users":     users,
 		"page":      page,
 		"page_size": pageSize,
 	})
@@ -63,22 +78,52 @@ func (h *ThreadHandler) List(c *gin.Context) {
 // Get GET /api/v1/thread/:tid
 func (h *ThreadHandler) Get(c *gin.Context) {
 	tidStr := c.Param("tid")
-	tid, err := strconv.ParseInt(tidStr, 10, 64)
-	if err != nil {
+	tid, parseErr := strconv.ParseInt(tidStr, 10, 64)
+	if parseErr != nil {
 		response.BadRequest(c, "invalid tid")
 		return
 	}
 
-	dto, err := h.svc.Get(c.Request.Context(), tid)
+	var dto *service.ThreadDTO
+	var err error
+	var (
+		tags   []*service.TagDTO
+		tagErr error
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		dto, err = h.svc.Get(c.Request.Context(), tid)
+	}()
+
+	go func() {
+		defer wg.Done()
+		tags, tagErr = h.tagSvc.GetByThread(c.Request.Context(), tid)
+	}()
+
+	wg.Wait()
+
 	if err != nil {
 		response.Fail(c, err)
 		return
 	}
-
+	if tagErr != nil {
+		response.Fail(c, tagErr)
+		return
+	}
 	if dto == nil {
 		response.NotFound(c, "thread not found")
 		return
 	}
 
-	response.Success(c, dto)
+	// 详情页浏览量异步累计（不阻塞主流程）
+	go h.svc.IncViews(context.Background(), tid)
+
+	response.Success(c, gin.H{
+		"thread": dto,
+		"tags":   tags,
+	})
 }
